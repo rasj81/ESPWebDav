@@ -1,4 +1,5 @@
 #include "ESPWebDAV.h"
+#include "logger.h"
 
 // Sections are copied from ESP8266Webserver
 
@@ -80,7 +81,58 @@ String ESPWebDAV::urlToUri(String url)	{
 // ------------------------
 bool ESPWebDAV::isClientWaiting() {
 // ------------------------
-	return server->hasClient();
+#if HTTPS_SUPPORTED
+	if(securePending) return true;
+#endif
+	return server && server->hasClient();
+}
+
+// ------------------------
+bool ESPWebDAV::httpsOn() {
+// ------------------------
+#if HTTPS_SUPPORTED
+	return secureServer != nullptr;
+#else
+	return false;
+#endif
+}
+
+#if HTTPS_SUPPORTED
+// ------------------------
+void ESPWebDAV::setSecureServer(BearSSL::WiFiServerSecure* s) {
+// ------------------------
+	if(!s && securePending) { secureClient.stop(); securePending = false; }
+	secureServer = s;
+}
+#endif
+
+// ------------------------
+// Do the TLS handshake for a waiting https client. It takes about a second, so it's done
+// before the SD card is taken from the printer. The request itself is served by handleClient().
+void ESPWebDAV::acceptSecure() {
+// ------------------------
+#if HTTPS_SUPPORTED
+	if(!secureServer || securePending || !secureServer->hasClient())
+		return;
+	// a TLS connection needs about 17 KB in one piece plus about 10 KB more
+	if(ESP.getMaxFreeBlockSize() < 17500 || ESP.getFreeHeap() < 28000)	{
+		WiFiClient c = secureServer->WiFiServer::accept();
+		c.stop();
+		static unsigned long lastLog = 0;
+		if(!lastLog || millis() - lastLog > 60000UL)	{
+			lastLog = millis() | 1;
+			logger.web(LOG_SPARSE, "HTTPS connection refused: not enough memory (free %u, largest block %u)", ESP.getFreeHeap(), ESP.getMaxFreeBlockSize());
+		}
+		return;
+	}
+	secureClient = secureServer->accept();
+	if(secureClient.connected())
+		securePending = true;
+	else	{
+		secureClient.stop();
+		logger.web(LOG_NORMAL, "HTTPS handshake failed (browser doesn't trust the certificate yet?)");
+	}
+#endif
 }
 
 
@@ -105,14 +157,37 @@ void ESPWebDAV::rejectClient(String rejectMessage) {
 // ------------------------
 void ESPWebDAV::processClient(THandlerFunction handler, String message) {
 // ------------------------
-	// Check if a client has connected
-	client = server->available();
-	if(!client)
+	// Take the waiting connection: an https one (already through its handshake) first
+	isSecure = false;
+#if HTTPS_SUPPORTED
+	if(securePending)	{
+		securePending = false;
+		client = &secureClient;
+		isSecure = true;
+	}
+	else
+#endif
+	{
+		if(!server) return;
+#if HTTPS_SUPPORTED
+		plainClient = server->accept();     // core 3.x name
+#else
+		plainClient = server->available();
+#endif
+		client = &plainClient;
+	}
+	if(!*client)
 		return;
 
-	// Wait until the client sends some data
-	while(!client.available())
+	// Wait until the client sends some data (give up after HTTP_MAX_POST_WAIT ms)
+	unsigned long waitStart = millis();
+	while(!client->available())	{
+		if(!client->connected() || (millis() - waitStart > HTTP_MAX_POST_WAIT))	{
+			client->stop();
+			return;
+		}
 		delay(1);
+	}
 	
 	// reset all variables
 	_chunked = false;
@@ -124,20 +199,27 @@ void ESPWebDAV::processClient(THandlerFunction handler, String message) {
 	depthHeader = String();
 	hostHeader = String();
 	destinationHeader = String();
+	authHeader = String();
+	busGivenBack = false;
 
 	// extract uri, headers etc
-	if(parseRequest())
-		// invoke the handler
-		(this->*handler)(message);
+	if(parseRequest())	{
+		// AUTH=1: nothing is served (not even "printer busy") without a valid login
+		if(!checkAuth())
+			sendAuthChallenge();
+		else
+			// invoke the handler
+			(this->*handler)(message);
+	}
 		
 	// finalize the response
 	if(_chunked)
 		sendContent("");
 
 	// send all data before closing connection
-	client.flush();
+	client->flush();
 	// close the connection
-	client.stop();
+	client->stop();
 }
 
 
@@ -148,8 +230,8 @@ void ESPWebDAV::processClient(THandlerFunction handler, String message) {
 bool ESPWebDAV::parseRequest() {
 // ------------------------
 	// Read the first line of HTTP request
-	String req = client.readStringUntil('\r');
-	client.readStringUntil('\n');
+	String req = client->readStringUntil('\r');
+	client->readStringUntil('\n');
 	
 	// First line of HTTP request looks like "GET /path HTTP/1.1"
 	// Retrieve the "/path" part by finding the spaces
@@ -168,8 +250,8 @@ bool ESPWebDAV::parseRequest() {
 	String headerValue;
 	
 	while(1) {
-		req = client.readStringUntil('\r');
-		client.readStringUntil('\n');
+		req = client->readStringUntil('\r');
+		client->readStringUntil('\n');
 		if(req == "") 
 			// no more headers
 			break;
@@ -190,6 +272,8 @@ bool ESPWebDAV::parseRequest() {
 			contentLengthHeader = headerValue;
 		else if(headerName.equalsIgnoreCase("Destination"))
 			destinationHeader = headerValue;
+		else if(headerName.equalsIgnoreCase("Authorization"))
+			authHeader = headerValue;
 	}
 	
 	return true;
@@ -217,7 +301,7 @@ void ESPWebDAV::send(String code, const char* content_type, const String& conten
 	String header;
 	_prepareHeader(header, code, content_type, content.length());
 
-	client.write(header.c_str(), header.length());
+	client->write(header.c_str(), header.length());
 	if(content.length())
 		sendContent(content);
 }
@@ -259,15 +343,15 @@ void ESPWebDAV::sendContent(const String& content) {
 		char * chunkSize = (char *) malloc(11);
 		if(chunkSize) {
 			sprintf(chunkSize, "%x%s", size, footer);
-			client.write(chunkSize, strlen(chunkSize));
+			client->write(chunkSize, strlen(chunkSize));
 			free(chunkSize);
 		}
 	}
 	
-	client.write(content.c_str(), size);
+	client->write(content.c_str(), size);
 	
 	if(_chunked) {
-		client.write(footer, 2);
+		client->write(footer, 2);
 		if (size == 0) {
 			_chunked = false;
 		}
@@ -286,15 +370,15 @@ void ESPWebDAV::sendContent_P(PGM_P content) {
 		char * chunkSize = (char *) malloc(11);
 		if(chunkSize) {
 			sprintf(chunkSize, "%x%s", size, footer);
-			client.write(chunkSize, strlen(chunkSize));
+			client->write(chunkSize, strlen(chunkSize));
 			free(chunkSize);
 		}
 	}
 	
-	client.write_P(content, size);
+	client->write_P(content, size);
 	
 	if(_chunked) {
-		client.write(footer, 2);
+		client->write(footer, 2);
 		if (size == 0) {
 			_chunked = false;
 		}
@@ -315,29 +399,39 @@ size_t ESPWebDAV::readBytesWithTimeout(uint8_t *buf, size_t bufSize) {
 // ------------------------
 	int timeout_ms = HTTP_MAX_POST_WAIT;
 	size_t numAvailable = 0;
-	while(!(numAvailable = client.available()) && client.connected() && timeout_ms--) 
+	while(!(numAvailable = client->available()) && client->connected() && timeout_ms--) 
 		delay(1);
 
 	if(!numAvailable)
 		return 0;
 
-	return client.read(buf, bufSize);
+	return client->read(buf, bufSize);
 }
 
 
 // ------------------------
+// Read exactly numToRead bytes unless the client stops sending for HTTP_MAX_POST_WAIT ms.
+// (PUT writes whole 512-byte blocks, and over https data arrives in TLS records of any size.)
 size_t ESPWebDAV::readBytesWithTimeout(uint8_t *buf, size_t bufSize, size_t numToRead) {
 // ------------------------
-	int timeout_ms = HTTP_MAX_POST_WAIT;
-	size_t numAvailable = 0;
-	
-	while(((numAvailable = client.available()) < numToRead) && client.connected() && timeout_ms--) 
+	if(numToRead > bufSize)
+		numToRead = bufSize;
+	size_t got = 0;
+	unsigned long last = millis();
+	while(got < numToRead)	{
+		if(client->available() > 0)	{
+			int r = client->read(buf + got, numToRead - got);
+			if(r > 0)	{
+				got += r;
+				last = millis();
+				continue;
+			}
+		}
+		if(!client->connected() || millis() - last > HTTP_MAX_POST_WAIT)
+			break;
 		delay(1);
-
-	if(!numAvailable)
-		return 0;
-
-	return client.read(buf, bufSize);
+	}
+	return got;
 }
 
 

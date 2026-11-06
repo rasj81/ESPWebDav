@@ -1,7 +1,12 @@
+#pragma once
 #include <ESP8266WiFi.h>
 #include <SdFat.h>
+#include "sdfat_compat.h"
+#include "https.h"
 
-#define DEBUG
+// Debug logging shares the serial line with the printer (Marlin reads G-code from it).
+// Uncomment only when debugging with the ESP disconnected from the printer.
+// #define DEBUG
 
 #ifdef DEBUG
 	#define DBG_PRINT(...) 		{ Serial.print(__VA_ARGS__); }
@@ -22,12 +27,25 @@ enum DepthType { DEPTH_NONE, DEPTH_CHILD, DEPTH_ALL };
 
 class ESPWebDAV	{
 public:
-	bool init(int chipSelectPin, SPISettings spiSettings, int serverPort);
-  bool initSD(int chipSelectPin, SPISettings spiSettings);
+	bool init(int chipSelectPin, SdSpeed_t spiSpeed, int serverPort);
+  bool initSD(int chipSelectPin, SdSpeed_t spiSpeed);
   bool startServer();
 	bool isClientWaiting();
+	void acceptSecure();        // TLS handshake for a waiting https client (before the card is taken)
+	bool httpsOn();
+#if HTTPS_SUPPORTED
+	void setSecureServer(BearSSL::WiFiServerSecure* s);
+#endif
 	void handleClient(String blank = "");
 	void rejectClient(String rejectMessage);
+
+	// SD helpers for other modules (caller must own the SPI bus)
+	bool isSdReady() { return sdReady; }
+	// true if the last request gave the SD card back to the printer early (firmware upload)
+	bool gaveBusBack() { return busGivenBack; }
+	bool appendLog(const char* path, const char* oldPath, const String& text);
+	bool sdRename(const char* from, const char* to);
+	bool sdWriteFile(const char* path, const char* text);
 	
 protected:
 	typedef void (ESPWebDAV::*THandlerFunction)(String);
@@ -48,6 +66,19 @@ protected:
 	void handleDirectoryCreate(ResourceType resource);
 	void handleMove(ResourceType resource);
 	void handleDelete(ResourceType resource);
+	bool handleManagerRoutes();
+	void handleManagerPage();
+	void redirectToManager();
+	void handleCertDownload();
+	void handleFirmwareUpload();
+	const char* cardState();
+	bool checkAuth();
+	void sendAuthChallenge();
+	String authParam(const String& h, const char* name);
+	String makeNonce(uint32_t ts);
+	String requestHost();
+	String xmlEscape(const String& s);
+	String urlEncodePath(const String& s);
 
 	// Sections are copied from ESP8266Webserver
 	String getMimeType(String path);
@@ -67,14 +98,26 @@ protected:
 	// variables pertaining to current most HTTP request being serviced
 	WiFiServer *server;
 	SdFat sd;
+	bool sdReady = false;
 
-	WiFiClient 	client;
+	WiFiClient	plainClient;
+	WiFiClient*	client = &plainClient;  // the connection being served (plain or TLS)
+	bool		isSecure = false;
+#if HTTPS_SUPPORTED
+	BearSSL::WiFiClientSecure secureClient;
+	BearSSL::WiFiServerSecure* secureServer = nullptr;
+	bool		securePending = false;
+#endif
 	String 		method;
 	String 		uri;
 	String 		contentLengthHeader;
 	String 		depthHeader;
 	String 		hostHeader;
 	String		destinationHeader;
+	String		authHeader;
+	bool		authStale = false;
+	bool		busGivenBack = false;
+	uint32_t	nonceSecret = 0;
 
 	String 		_responseHeaders;
 	bool		_chunked;
