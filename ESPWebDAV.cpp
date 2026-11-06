@@ -723,8 +723,8 @@ bool ESPWebDAV::handleManagerRoutes() {
 	// firmware build date, shown on the file manager page
 	if(uri == "/_info")	{
 		sendHeader("Cache-Control", "no-cache");
-		// tells the page whether to offer "Update firmware" (only with a login set)
-		sendHeader("X-Update", config.authOn() ? "1" : "0");
+		// tells the page whether to offer "Update firmware" (always)
+		sendHeader("X-Update", "1");
 		sendHeader("X-Card", cardState());
 		send("200 OK", "text/plain", "ESPWebDAV build " __DATE__ " " __TIME__);
 		return true;
@@ -780,12 +780,9 @@ void ESPWebDAV::redirectToManager() {
 // back to the printer for the 10-30 seconds this takes.
 void ESPWebDAV::handleFirmwareUpload() {
 // ------------------------
-	// without a login anyone on the network could replace the firmware, so it's refused
-	if(!config.authOn())	{
-		logger.net(LOG_SPARSE, "Firmware upload REFUSED from %s: no login set (AUTH=1, DAV_USER, DAV_PASSWORD)", client->remoteIP().toString().c_str());
-		send("403 Forbidden", "text/plain", "Firmware update over the network needs a login: set AUTH=1, DAV_USER and DAV_PASSWORD. FIRMWARE.BIN on the card still works.\n");
-		return;
-	}
+	// A login is not required here (owner's choice): with AUTH=1 the normal login check still applies,
+	// without it anyone on the network can replace the firmware. Log who did.
+	logger.net(LOG_SPARSE, "Firmware upload from %s%s", client->remoteIP().toString().c_str(), config.authOn() ? "" : " (no login set)");
 	size_t len = contentLengthHeader.toInt();
 	if(len < 4096)	{
 		send("400 Bad Request", "text/plain", "Firmware update: no file, or file too small\n");
