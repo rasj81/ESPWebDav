@@ -359,7 +359,7 @@ bool Network::ready() {
 
 	// has other master been using the bus in last few seconds
 	if(!sdcontrol.canWeTakeBus()) {
-		dav.rejectClient("Printer is using the card");
+		dav.rejectClient(sdcontrol.diagSummary()); // DIAGNOSTIC BUILD: was "Printer is using the card"
 		return false;
 	}
 

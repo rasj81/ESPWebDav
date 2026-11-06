@@ -15,6 +15,10 @@ public:
   static bool printerActive();         // printer used the card within the last PRINTER_WAIT seconds
   static bool takePrinterTouched();    // true (once) if the printer used the card since the last call
 
+  // DIAGNOSTIC BUILD (branch diagnostic-cs-sense): measure what the printer does on the card pins.
+  static void sample();                // call from loop(): looks for activity on the SD clock/command pins
+  static String diagSummary();         // short XML-safe, space-free text; used as the reject message
+
   // Who may use the card: the network (default) or only the printer (web switch / M58)
   static void reserveForPrinter(bool r) { _reserved = r; }
   static bool reservedForPrinter() { return _reserved; }
@@ -28,6 +32,13 @@ private:
   static volatile bool _printerTouched;
   static volatile bool _weTookBus;
   static volatile unsigned long _waitMs;
+  static volatile uint32_t _csEdges;    // DIAGNOSTIC: falling edges on CS_SENSE while we did not own the bus
+  static volatile uint32_t _lastEdgeMs; // DIAGNOSTIC: millis() of the latest edge (0 = none)
+  static uint32_t _clkSeenMs;           // DIAGNOSTIC: last time the SD clock pin was seen changing (0 = never)
+  static uint32_t _cmdSeenMs;           // DIAGNOSTIC: same for the SD command pin
+  static uint32_t _lastSampleMs;
+  static uint32_t _prevReportEdges;
+  static uint32_t _prevReportMs;
   static bool _reserved;
 };
 

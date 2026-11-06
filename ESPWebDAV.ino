@@ -50,6 +50,9 @@ void loop() {
   // Handle gcode
   gcode.Handle();
 
+  // DIAGNOSTIC BUILD: watch the SD clock/command pins for printer activity
+  sdcontrol.sample();
+
   // blink
   statusBlink();
 }
