@@ -46,6 +46,7 @@ void Config::setDefaults() {
   data.davPsw[0] = '\0';
   data.printerWait = SPI_BLOCKOUT_PERIOD / 1000;
   data.led = LEDMODE_AUTO;
+  data.bootWait = BOOT_WAIT_DEFAULT;
 }
 
 // Make sure data loaded from EEPROM (possibly written by older firmware) is sane
@@ -95,6 +96,11 @@ void Config::validate() {
   if(data.ver == 7) {
     // version 7 had no LED setting
     data.led = LEDMODE_AUTO;
+    data.ver = 8;
+  }
+  if(data.ver == 8) {
+    // version 8 had no BOOT_WAIT setting
+    data.bootWait = BOOT_WAIT_DEFAULT;
     data.ver = CONFIG_VERSION;
   }
   if(data.ver != CONFIG_VERSION) {
@@ -109,6 +115,7 @@ void Config::validate() {
   if(data.https > 1) data.https = 0;
   if(data.auth > 1) data.auth = 0;
   if(data.led > LEDMODE_OFF) data.led = LEDMODE_AUTO;
+  if(data.bootWait > 60) data.bootWait = BOOT_WAIT_DEFAULT;
   if(data.printerWait < 1 || data.printerWait > 60) data.printerWait = SPI_BLOCKOUT_PERIOD / 1000;
   data.davUser[DAV_USER_LEN] = '\0';
   data.davPsw[DAV_PASSWD_LEN] = '\0';
@@ -218,6 +225,13 @@ int Config::setValue(const String& sKEY, String sValue) {
     int w = sValue.toInt();
     if(w < 1 || w > 60) return SET_BAD;
     data.printerWait = w;
+  }
+  else if(sKEY == "BOOT_WAIT") {
+    // seconds to stay off the card after power-up (0-60), so the printer can start first
+    if(sValue.length() == 0) return SET_BAD;
+    int w = sValue.toInt();
+    if(w < 0 || w > 60 || (w == 0 && sValue != "0")) return SET_BAD;
+    data.bootWait = w;
   }
   else if(sKEY == "LED") {
     // AUTO = status patterns, ON / OFF = always on / off
@@ -337,6 +351,17 @@ int Config::loadSD() {
         ipStr(data.ip).c_str(), ipStr(data.subnet).c_str(), ipStr(data.gateway).c_str(), ipStr(data.dns).c_str());
   }
   return rst;
+}
+
+// Read just BOOT_WAIT from flash. Needed before the card is touched, i.e. before SETUP.INI can be read.
+unsigned char Config::savedBootWait() {
+  CONFIG_TYPE d;
+  EEPROM.begin(EEPROM_SIZE);
+  uint8_t *p = (uint8_t*)(&d);
+  for (unsigned int i = 0; i < sizeof(d); i++) *(p + i) = EEPROM.read(i);
+  EEPROM.end();
+  if(d.ver != CONFIG_VERSION || d.bootWait > 60) return BOOT_WAIT_DEFAULT;
+  return d.bootWait;
 }
 
 unsigned char Config::load() {
@@ -466,6 +491,7 @@ void Config::printSettings() {
   Serial.printf("HTTPS=%d\n", data.https);
   Serial.printf("PRINTER_WAIT=%d\n", data.printerWait);
   Serial.printf("LED=%s\n", StatusLed::modeName(data.led));
+  Serial.printf("BOOT_WAIT=%d\n", data.bootWait);
   Serial.printf("AUTH=%d%s\n", data.auth, (data.auth && !authOn()) ? "  (not active: DAV_USER or DAV_PASSWORD is empty)" : "");
   Serial.printf("DAV_USER=%s\n", data.davUser);
   Serial.printf("DAV_PASSWORD=%s\n", data.davPsw[0] ? "(set, hidden)" : "");

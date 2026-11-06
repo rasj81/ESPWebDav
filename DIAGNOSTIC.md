@@ -44,7 +44,7 @@ After the first Wi-Fi connect since power-up the IP address is blinked once: 3 f
 
 Control: `LED=AUTO|ON|OFF` in SETUP.INI (ON/OFF also suppress the IP blink); `M60 AUTO|ON|OFF` until restart; `M60 IP` repeats the address.
 
-The saved settings version goes from 7 to 8. Flashing this build over an older one migrates cleanly; flashing an older build back over it resets the settings except Wi-Fi name, password and device name (SETUP.INI on the card restores the rest).
+The saved settings version goes from 7 to 9 (8 added LED, 9 added BOOT_WAIT). Flashing this build over an older one migrates cleanly; flashing an older build back over it resets the settings except Wi-Fi name, password and device name (SETUP.INI on the card restores the rest).
 
 ## Test: does the board's own card access break the printer? (DIAG_START_IN_PRINTER_MODE)
 `ESPWebDAV.ino` has `#define DIAG_START_IN_PRINTER_MODE 1`: the board powers up in Printer mode (slow 1 s on / 1 s off LED) and does not touch the card at all. Wi-Fi uses the settings saved in flash (it must have connected once with SETUP.INI before).

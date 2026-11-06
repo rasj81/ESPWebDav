@@ -11,7 +11,8 @@
 
 #define EEPROM_SIZE 2048    // settings at 0, HTTPS certificate at 1024 (https.h)
 #include "statusLed.h"   // LEDMODE_*
-#define CONFIG_VERSION 8   // bump when fields are added after 'name'
+#define CONFIG_VERSION 9   // bump when fields are added after 'name'
+#define BOOT_WAIT_DEFAULT 10  // seconds
 #define DOMAIN_LEN 64
 #define DAV_USER_LEN 32
 #define DAV_PASSWD_LEN 64
@@ -55,6 +56,7 @@ typedef struct config_type
   char davPsw[DAV_PASSWD_LEN + 1];
   unsigned char printerWait; // PRINTER_WAIT seconds (added in version 7)
   unsigned char led;      // LED=AUTO|ON|OFF, LEDMODE_* (added in version 8)
+  unsigned char bootWait; // BOOT_WAIT seconds off the card after power-up (added in version 9)
 }CONFIG_TYPE;
 
 // Results of Config::setValue()
@@ -70,6 +72,8 @@ public:
   int setValue(const String& key, String value);  // key in upper case, same names as SETUP.INI
   int loadSD();
 	unsigned char load();
+	// BOOT_WAIT as saved in flash, readable before the card is touched (default if never saved)
+	static unsigned char savedBootWait();
   char* ssid();
   void ssid(char* ssid);
   char* password();

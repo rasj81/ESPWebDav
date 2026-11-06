@@ -15,11 +15,6 @@
 // Set to 0 for the normal behaviour.
 #define DIAG_START_IN_PRINTER_MODE 0
 
-// Stay off the card for this long after power-up, so the printer finishes its own card start first.
-// The printer powers the card and this board together; both start at once and the printer
-// (SPI build) was seen to hang with a blank screen while this board read the card. Set 0 for no wait.
-#define BOOT_HOLDOFF_MS 20000
-
 // LED is connected to GPIO2 on this board
 #define INIT_LED			{pinMode(2, OUTPUT);}
 #define LED_ON				{digitalWrite(2, LOW);}
@@ -39,10 +34,10 @@ void setup() {
 	sdcontrol.reserveForPrinter(true);
 #endif
 	
-#if BOOT_HOLDOFF_MS
-	// card lines stay untouched (inputs) while we wait
-	for(uint32_t t = 0; t < BOOT_HOLDOFF_MS; t += 500) { LED_ON; delay(50); LED_OFF; delay(450); }
-#endif
+	// BOOT_WAIT (SETUP.INI, kept in flash): stay off the card after power-up so the printer finishes its
+	// own card start first. Read from flash because SETUP.INI is on the card we are staying away from.
+	// A change in SETUP.INI therefore applies from the next power-up after it was read.
+	for(uint32_t t = 0; t < (uint32_t)Config::savedBootWait() * 1000UL; t += 500) { LED_ON; delay(50); LED_OFF; delay(450); }
 
 	sdcontrol.setup();
 
