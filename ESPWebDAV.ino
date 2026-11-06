@@ -10,11 +10,6 @@
 #include "firmware.h"
 #include "statusLed.h"
 
-// DIAGNOSTIC BUILD: 1 = start in Printer mode, so the board does not touch the SD card at power-up
-// (no SETUP.INI, no FIRMWARE.BIN check, no log writes). Wi-Fi comes from the settings saved in flash.
-// Set to 0 for the normal behaviour.
-#define DIAG_START_IN_PRINTER_MODE 0
-
 // LED is connected to GPIO2 on this board
 #define INIT_LED			{pinMode(2, OUTPUT);}
 #define LED_ON				{digitalWrite(2, LOW);}
@@ -28,12 +23,6 @@ void setup() {
 	INIT_LED;
 	blink();
 
-#if DIAG_START_IN_PRINTER_MODE
-	// DIAGNOSTIC: never touch the card until "Use card from here" (or M58 NETWORK).
-	// Every card access in this sketch is already refused while the card is reserved for the printer.
-	sdcontrol.reserveForPrinter(true);
-#endif
-	
 	// BOOT_WAIT (SETUP.INI, kept in flash): stay off the card after power-up so the printer finishes its
 	// own card start first. Read from flash because SETUP.INI is on the card we are staying away from.
 	// A change in SETUP.INI therefore applies from the next power-up after it was read.
@@ -66,9 +55,6 @@ void loop() {
 
   // Handle gcode
   gcode.Handle();
-
-  // DIAGNOSTIC BUILD: watch the SD clock/command pins for printer activity
-  sdcontrol.sample();
 
   // blink
   statusBlink();

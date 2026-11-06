@@ -1,30 +1,21 @@
-# Diagnostic build (branch `diagnostic-cs-sense`): why is the card "busy" with the printer idle?
+# Card-sharing status page (`/_diag`)
 
-Sketch: `ESPWebDAV.ino` at the repo root (Arduino IDE needs the folder to be named `ESPWebDAV`). Based on the snapshot of `~/Downloads/ESPWebDAV` taken 2026-11-05 (commit on `main`). Bus-sharing rules (PRINTER_WAIT, Printer mode) are unchanged; this only measures and reports.
+Open `http://<ip>/_diag` in a browser (the IP is blinked by the LED at boot). It answers even while the printer has the card, and shows how the board sees the printer's use of the card.
 
-## What changed
-- `sdControl.*`: the CS_SENSE interrupt also counts falling edges and remembers the latest one. `sample()` (called from `loop()`) reads the SD clock (GPIO14) and command (GPIO13) pins in a tight loop to see whether the printer is clocking the card. No interrupts on those pins (the clock would starve the chip).
-- `network.cpp`: the "Printer is using the card" reject message is replaced by a diagnostic string.
-- `ESPWebDAV.ino`: calls `sdcontrol.sample()` in `loop()`.
-
-## Use
-1. Build for Generic ESP8285 Module, flash with the card on `USB2UART` (hold FLSH while plugging in USB, release, Upload).
-2. Put the card in the printer, leave the printer idle at the main menu, wait for the Wi-Fi to come up.
-3. Open `http://<ip>/_diag` in a browser (the IP is blinked by the LED at boot). It answers even while the printer has the card. Refresh 2-3 times, 5+ seconds apart, and record each string. The same text also appears in brackets in the file manager's red error line when a listing is refused, and in `webdav.log` when the board could write it.
+Originally built to find out why the card looked "busy" with the printer idle (branch `diagnostic-cs-sense`, merged into `main`). The temporary parts (the pin sampler, the diagnostic reject message, the start-in-Printer-mode switch) were removed again; this page and its counters stay.
 
 ## Reading it
-`Printer_busy_diag_up<s>s_cs<0|1>_edges<N>_last<ms>ms_d<dN>_in<dms>ms_clk<ms>_cmd<ms>_wait<s>s_left<ms>ms`
+`Printer_busy_diag_up<s>s_cs<0|1>_edges<N>_last<ms>ms_d<dN>_in<dms>ms_wait<s>s_left<ms>ms_rsv<0|1>`
 - `up` seconds since boot. `cs` level of CS_SENSE right now (0 = low).
 - `edges` total falling edges on CS_SENSE since boot (while we did not own the bus). `last` ms since the latest (0 = none).
 - `d<dN>_in<dms>` edges since the previous report and the ms between reports.
-- `clk` / `cmd` ms since the clock / command pin was last seen changing (0 = never).
-- `wait` the PRINTER_WAIT setting. `left` ms until the page would accept you (> 0 = still blocked).
+- `wait` the PRINTER_WAIT setting. `left` ms until the board may use the card (> 0 = still blocked).
+- `rsv` 1 = the card is reserved for the printer (Printer mode), so the board stays off it.
 
 ## Interpreting
 - `d` > 0 on every refresh at idle: something touches DAT3 constantly (printer polling, or noise).
-- `edges` flat but `cs`0: line stuck low; edge detection is the wrong test.
-- `clk`/`cmd` stay 0 while `edges` rise: the edges are not SD traffic.
-- `clk`/`cmd` recent at idle: the printer really is clocking the card; a clock-based signal would not help.
+- `edges` flat and `left` 0 with `rsv` 0: the board is free; a failure to use the card is then on the card side (see the SdFat error code in the "Failed to initialize SD Card" message).
+- `edges` flat but `cs` 0: line stuck low; edge detection is the wrong test.
 
 ## Separate finding
 The ESP's own SD update file is `FIRMWARE.BIN` (`firmware.h`), the same name the printer's bootloader looks for. That is how the printer picked up the SD-WIFI firmware. Consider renaming `FW_FILE` (e.g. `ESPFW.BIN`) so a printer can never flash it.
