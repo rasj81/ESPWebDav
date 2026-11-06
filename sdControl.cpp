@@ -120,10 +120,10 @@ String SDControl::diagSummary() {
 
 	char b[220];
 	snprintf(b, sizeof(b),
-		"Printer_busy_diag_up%lus_cs%d_edges%lu_last%lums_d%lu_in%lums_clk%lu_cmd%lu_wait%lus_left%ldms",
+		"Printer_busy_diag_up%lus_cs%d_edges%lu_last%lums_d%lu_in%lums_clk%lu_cmd%lu_wait%lus_left%ldms_rsv%d",
 		(unsigned long)(now / 1000), digitalRead(CS_SENSE), (unsigned long)edges,
 		(unsigned long)(last ? now - last : 0), (unsigned long)dEdges, (unsigned long)dMs,
 		(unsigned long)(_clkSeenMs ? now - _clkSeenMs : 0), (unsigned long)(_cmdSeenMs ? now - _cmdSeenMs : 0),
-		(unsigned long)(_waitMs / 1000), left);
+		(unsigned long)(_waitMs / 1000), left, _reserved ? 1 : 0);
 	return String(b);
 }

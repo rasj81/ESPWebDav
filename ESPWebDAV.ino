@@ -13,7 +13,7 @@
 // DIAGNOSTIC BUILD: 1 = start in Printer mode, so the board does not touch the SD card at power-up
 // (no SETUP.INI, no FIRMWARE.BIN check, no log writes). Wi-Fi comes from the settings saved in flash.
 // Set to 0 for the normal behaviour.
-#define DIAG_START_IN_PRINTER_MODE 1
+#define DIAG_START_IN_PRINTER_MODE 0
 
 // LED is connected to GPIO2 on this board
 #define INIT_LED			{pinMode(2, OUTPUT);}
