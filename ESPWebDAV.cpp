@@ -714,6 +714,12 @@ bool ESPWebDAV::handleManagerRoutes() {
 	}
 	if(!(method.equals("GET") || method.equals("HEAD")))
 		return false;
+	// DIAGNOSTIC BUILD: card-sharing counters as plain text, e.g. http://<ip>/_diag (works while the printer has the card)
+	if(uri == "/_diag")	{
+		sendHeader("Cache-Control", "no-cache");
+		send("200 OK", "text/plain", sdcontrol.diagSummary().c_str());
+		return true;
+	}
 	// firmware build date, shown on the file manager page
 	if(uri == "/_info")	{
 		sendHeader("Cache-Control", "no-cache");

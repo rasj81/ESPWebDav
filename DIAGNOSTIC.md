@@ -10,7 +10,7 @@ Sketch: `ESPWebDAV.ino` at the repo root (Arduino IDE needs the folder to be nam
 ## Use
 1. Build for Generic ESP8285 Module, flash with the card on `USB2UART` (hold FLSH while plugging in USB, release, Upload).
 2. Put the card in the printer, leave the printer idle at the main menu, wait for the Wi-Fi to come up.
-3. Browse the card over WebDAV. The diagnostic text appears as a file entry. Refresh 2-3 times, 5+ seconds apart, and record each string.
+3. Open `http://<ip>/_diag` in a browser (the IP is blinked by the LED at boot). It answers even while the printer has the card. Refresh 2-3 times, 5+ seconds apart, and record each string. The same text also appears in brackets in the file manager's red error line when a listing is refused, and in `webdav.log` when the board could write it.
 
 ## Reading it
 `Printer_busy_diag_up<s>s_cs<0|1>_edges<N>_last<ms>ms_d<dN>_in<dms>ms_clk<ms>_cmd<ms>_wait<s>s_left<ms>ms`
