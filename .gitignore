@@ -1,0 +1,4 @@
+.pio/
+build/
+backup_v10/
+.DS_Store
