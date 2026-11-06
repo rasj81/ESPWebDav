@@ -10,7 +10,8 @@
 #define TZ_LEN 48
 
 #define EEPROM_SIZE 2048    // settings at 0, HTTPS certificate at 1024 (https.h)
-#define CONFIG_VERSION 7   // bump when fields are added after 'name'
+#include "statusLed.h"   // LEDMODE_*
+#define CONFIG_VERSION 8   // bump when fields are added after 'name'
 #define DOMAIN_LEN 64
 #define DAV_USER_LEN 32
 #define DAV_PASSWD_LEN 64
@@ -53,6 +54,7 @@ typedef struct config_type
   char davUser[DAV_USER_LEN + 1];
   char davPsw[DAV_PASSWD_LEN + 1];
   unsigned char printerWait; // PRINTER_WAIT seconds (added in version 7)
+  unsigned char led;      // LED=AUTO|ON|OFF, LEDMODE_* (added in version 8)
 }CONFIG_TYPE;
 
 // Results of Config::setValue()

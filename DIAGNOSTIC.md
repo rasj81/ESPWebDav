@@ -28,3 +28,20 @@ Sketch: `ESPWebDAV.ino` at the repo root (Arduino IDE needs the folder to be nam
 
 ## Separate finding
 The ESP's own SD update file is `FIRMWARE.BIN` (`firmware.h`), the same name the printer's bootloader looks for. That is how the printer picked up the SD-WIFI firmware. Consider renaming `FW_FILE` (e.g. `ESPFW.BIN`) so a printer can never flash it.
+
+## Status LED (this branch)
+`statusLed.*` replaces the blocking blink code; `loop()` no longer stalls for 50 ms every second.
+
+| LED | Meaning |
+|---|---|
+| off | Wi-Fi connecting |
+| solid on | no Wi-Fi, or this board is using the card right now |
+| 1 short flash / s | connected, card free |
+| 2 short flashes / s | printer used the card within PRINTER_WAIT |
+| 1 s on, 1 s off | Printer mode (`M58 PRINTER`) |
+
+After the first Wi-Fi connect since power-up the IP address is blinked once: 3 fast flashes, then each digit as that many flashes (0 = one long flash), a long pause at each dot, 3 fast flashes to finish. `10.0.0.24` = 1, long, (dot) long, (dot) long, (dot) 2, 4. About 15-55 s depending on the address.
+
+Control: `LED=AUTO|ON|OFF` in SETUP.INI (ON/OFF also suppress the IP blink); `M60 AUTO|ON|OFF` until restart; `M60 IP` repeats the address.
+
+The saved settings version goes from 7 to 8. Flashing this build over an older one migrates cleanly; flashing an older build back over it resets the settings except Wi-Fi name, password and device name (SETUP.INI on the card restores the rest).

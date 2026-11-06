@@ -113,6 +113,7 @@ void Gcode::printHelp() {
   SERIAL_ECHOLN("  M55              show the date and time   M55 2026-11-05 14:30 sets it (no internet)");
   SERIAL_ECHOLN("  M56              HTTPS certificate info   M56 NEW makes a new certificate");
   SERIAL_ECHOLN("  M57              install FIRMWARE.BIN from the card now");
+  SERIAL_ECHOLN("  M60              LED: M60 AUTO / ON / OFF (until restart; SETUP.INI LED= keeps it), M60 IP blinks the address");
   SERIAL_ECHOLN("  M58              who may use the card   M58 PRINTER / M58 NETWORK switches it");
   SERIAL_ECHOLN("  M59              restart the board");
 }
@@ -294,6 +295,24 @@ void Gcode::gcode_M59() {
 }
 
 /**
+ * M60: status LED. AUTO / ON / OFF last until restart (SETUP.INI LED= is the permanent setting); IP blinks the address
+ */
+void Gcode::gcode_M60() {
+  String a = parser.string_arg ? parser.string_arg : "";
+  a.trim();
+  a.toUpperCase();
+  if(a == "AUTO")     StatusLed::setMode(LEDMODE_AUTO);
+  else if(a == "ON")  StatusLed::setMode(LEDMODE_ON);
+  else if(a == "OFF") StatusLed::setMode(LEDMODE_OFF);
+  else if(a == "IP")  StatusLed::announceIp(WiFi.localIP());
+  else if(a.length()) {
+    SERIAL_ECHOLN("Use M60, M60 AUTO, M60 ON, M60 OFF or M60 IP");
+    return;
+  }
+  Serial.printf("LED: %s\n", StatusLed::modeName(StatusLed::mode()));
+}
+
+/**
  * Process the parsed command and dispatch it to its handler
  */
 void Gcode::process_parsed_command() {
@@ -318,6 +337,7 @@ void Gcode::process_parsed_command() {
       case 57: gcode_M57(); break;
       case 58: gcode_M58(); break;
       case 59: gcode_M59(); break;
+      case 60: gcode_M60(); break;
       default: parser.unknown_command_error();
     }
     break;

@@ -1,3 +1,4 @@
+#include "statusLed.h"
 #include <ESP8266WiFi.h>
 #include <SPI.h>
 #include <SdFat.h>
@@ -44,6 +45,7 @@ void Config::setDefaults() {
   data.davUser[0] = '\0';
   data.davPsw[0] = '\0';
   data.printerWait = SPI_BLOCKOUT_PERIOD / 1000;
+  data.led = LEDMODE_AUTO;
 }
 
 // Make sure data loaded from EEPROM (possibly written by older firmware) is sane
@@ -88,6 +90,11 @@ void Config::validate() {
   if(data.ver == 6) {
     // version 6 had a fixed 20 s wait after the printer used the card
     data.printerWait = SPI_BLOCKOUT_PERIOD / 1000;
+    data.ver = 7;
+  }
+  if(data.ver == 7) {
+    // version 7 had no LED setting
+    data.led = LEDMODE_AUTO;
     data.ver = CONFIG_VERSION;
   }
   if(data.ver != CONFIG_VERSION) {
@@ -101,6 +108,7 @@ void Config::validate() {
   data.domain[DOMAIN_LEN - 1] = '\0';
   if(data.https > 1) data.https = 0;
   if(data.auth > 1) data.auth = 0;
+  if(data.led > LEDMODE_OFF) data.led = LEDMODE_AUTO;
   if(data.printerWait < 1 || data.printerWait > 60) data.printerWait = SPI_BLOCKOUT_PERIOD / 1000;
   data.davUser[DAV_USER_LEN] = '\0';
   data.davPsw[DAV_PASSWD_LEN] = '\0';
@@ -210,6 +218,14 @@ int Config::setValue(const String& sKEY, String sValue) {
     int w = sValue.toInt();
     if(w < 1 || w > 60) return SET_BAD;
     data.printerWait = w;
+  }
+  else if(sKEY == "LED") {
+    // AUTO = status patterns, ON / OFF = always on / off
+    sValue.toUpperCase();
+    if(sValue == "AUTO" || sValue == "") data.led = LEDMODE_AUTO;
+    else if(sValue == "ON" || sValue == "1") data.led = LEDMODE_ON;
+    else if(sValue == "OFF" || sValue == "0") data.led = LEDMODE_OFF;
+    else return SET_BAD;
   }
   else if(sKEY == "AUTH") {
     // 1 = WebDAV and the file manager ask for DAV_USER / DAV_PASSWORD
@@ -356,6 +372,7 @@ unsigned char Config::load() {
 
 void Config::applyLogLevels() {
   sdcontrol.setWaitMs(data.printerWait * 1000UL);
+  StatusLed::setMode(data.led);
   logger.setLevels(data.logNet, data.logFiles, data.logWeb);
 }
 
@@ -448,6 +465,7 @@ void Config::printSettings() {
   Serial.printf("DNS=%s\n", ipStr(data.dns).c_str());
   Serial.printf("HTTPS=%d\n", data.https);
   Serial.printf("PRINTER_WAIT=%d\n", data.printerWait);
+  Serial.printf("LED=%s\n", StatusLed::modeName(data.led));
   Serial.printf("AUTH=%d%s\n", data.auth, (data.auth && !authOn()) ? "  (not active: DAV_USER or DAV_PASSWORD is empty)" : "");
   Serial.printf("DAV_USER=%s\n", data.davUser);
   Serial.printf("DAV_PASSWORD=%s\n", data.davPsw[0] ? "(set, hidden)" : "");

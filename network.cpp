@@ -1,3 +1,4 @@
+#include "statusLed.h"
 #include "network.h"
 #include "serial.h"
 #include "config.h"
@@ -226,6 +227,7 @@ bool Network::start() {
   SERIAL_ECHO("Mode: "); SERIAL_ECHOLN(WiFi.getPhyMode());
   SERIAL_ECHO("Asscess to SD at the Run prompt : \\\\"); SERIAL_ECHO(WiFi.localIP());SERIAL_ECHOLN("\\DavWWWRoot");
   logStatus("Wi-Fi connected");
+  StatusLed::announceIpOnce(WiFi.localIP());   // blink the address once after power-up
 
   // Announce <name>.local on the network (Bonjour/mDNS)
   if(mdnsStarted) { MDNS.end(); mdnsStarted = false; }   // M52 reconnect, maybe with a new name

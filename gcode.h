@@ -28,6 +28,7 @@ private:
   void gcode_M57();
   void gcode_M58();
   void gcode_M59();
+  void gcode_M60();
   void process_parsed_command();
   void process_next_command();
   

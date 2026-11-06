@@ -1,6 +1,7 @@
 #include <ESP8266WiFi.h>
 #include "sdControl.h"
 #include "pins.h"
+#include "statusLed.h"
 
 volatile unsigned long SDControl::_lastPrinterUse = 0;
 volatile bool SDControl::_printerUsed = false;
@@ -47,7 +48,7 @@ void SDControl::setup() {
 void SDControl::takeBusControl()	{
 // ------------------------
 	_weTookBus = true;
-	//LED_ON;
+	StatusLed::cardOwned(true);
 	pinMode(MISO_PIN, SPECIAL);	
 	pinMode(MOSI_PIN, SPECIAL);	
 	pinMode(SCLK_PIN, SPECIAL);	
@@ -61,8 +62,8 @@ void SDControl::relinquishBusControl()	{
 	pinMode(MOSI_PIN, INPUT);	
 	pinMode(SCLK_PIN, INPUT);	
 	pinMode(SD_CS, INPUT);
-	//LED_OFF;
 	_weTookBus = false;
+	StatusLed::cardOwned(false);
 }
 
 bool SDControl::printerActive() {

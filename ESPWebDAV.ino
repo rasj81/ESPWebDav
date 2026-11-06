@@ -8,6 +8,7 @@
 #include "gcode.h"
 #include "sdControl.h"
 #include "firmware.h"
+#include "statusLed.h"
 
 // LED is connected to GPIO2 on this board
 #define INIT_LED			{pinMode(2, OUTPUT);}
@@ -78,23 +79,5 @@ void errorBlink()	{
 }
 
 void statusBlink() {
-  static unsigned long time = 0;
-  if(millis() > time + 1000 ) {
-    if(network.isConnecting()) {
-      LED_OFF;
-    }
-    else if(network.isConnected()) {
-      LED_ON; 
-  		delay(50); 
-  		LED_OFF; 
-    }
-    else {
-      LED_ON;
-    }
-    time = millis();
-  }
-
-  // SPI bus not ready
-	//if(millis() < spiBlockoutTime)
-	//	blink();
+  StatusLed::handle(network.isConnecting(), network.isConnected());
 }
