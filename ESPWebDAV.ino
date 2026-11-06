@@ -15,6 +15,11 @@
 // Set to 0 for the normal behaviour.
 #define DIAG_START_IN_PRINTER_MODE 0
 
+// Stay off the card for this long after power-up, so the printer finishes its own card start first.
+// The printer powers the card and this board together; both start at once and the printer
+// (SPI build) was seen to hang with a blank screen while this board read the card. Set 0 for no wait.
+#define BOOT_HOLDOFF_MS 20000
+
 // LED is connected to GPIO2 on this board
 #define INIT_LED			{pinMode(2, OUTPUT);}
 #define LED_ON				{digitalWrite(2, LOW);}
@@ -34,6 +39,11 @@ void setup() {
 	sdcontrol.reserveForPrinter(true);
 #endif
 	
+#if BOOT_HOLDOFF_MS
+	// card lines stay untouched (inputs) while we wait
+	for(uint32_t t = 0; t < BOOT_HOLDOFF_MS; t += 500) { LED_ON; delay(50); LED_OFF; delay(450); }
+#endif
+
 	sdcontrol.setup();
 
 	// FIRMWARE.BIN on the card: install it and restart (renamed to FIRMWARE.BAK afterwards)
