@@ -204,7 +204,7 @@ $('#fw').onchange=async e=>{
  x.onerror=()=>done(false,'Firmware upload failed (connection lost). The old firmware is still running.');
  x.send(f);
 };
-// the board only allows network updates when a login is set (AUTH=1)
+// the board always offers network updates (with AUTH=1 the login applies)
 fetch('/_info').then(r=>{if(r.headers.get('X-Update')==='1')$('#fwb').style.display='';return r.ok?r.text():''}).then(t=>{$('#fwv').textContent=t}).catch(()=>{});
 $('#up').onclick=()=>go(parent(cur));$('#rf').onclick=()=>go(cur);
 $('#host').textContent=location.hostname+' SD card';document.title=location.hostname+' files';
