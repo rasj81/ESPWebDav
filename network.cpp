@@ -368,10 +368,20 @@ bool Network::ready() {
 	// the card didn't start earlier (e.g. the printer had it): try again now
 	if(initFailed) {
 	  sdcontrol.takeBusControl();
-	  initFailed = !dav.initSD(SD_CS, SPI_FULL_SPEED);
+	  // full speed first, then slower: the lines now also reach the printer's slot
+	  static const SdSpeed_t speeds[] = { SPI_FULL_SPEED, SPI_HALF_SPEED, SPI_QUARTER_SPEED };
+	  int tries = 0;
+	  for(const SdSpeed_t& sp : speeds) {
+	    tries++;
+	    initFailed = !dav.initSD(SD_CS, sp);
+	    if(!initFailed) break;
+	  }
+	  char why[64] = "";
+	  if(initFailed) snprintf(why, sizeof(why), "_err0x%02X_data0x%02X_tried%d",
+	                          (unsigned)(dav.sdErrorCode() >> 8), (unsigned)(dav.sdErrorCode() & 0xFF), tries);
 	  sdcontrol.relinquishBusControl();
 	  if(initFailed) {
-	    dav.rejectClient("Failed to initialize SD Card");
+	    dav.rejectClient((String("Failed to initialize SD Card") + why).c_str());
 	    return false;
 	  }
 	  logger.net(LOG_NORMAL, "SD card started");

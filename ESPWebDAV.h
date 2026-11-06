@@ -29,6 +29,7 @@ class ESPWebDAV	{
 public:
 	bool init(int chipSelectPin, SdSpeed_t spiSpeed, int serverPort);
   bool initSD(int chipSelectPin, SdSpeed_t spiSpeed);
+  uint32_t sdErrorCode() { return ((uint32_t)sd.card()->errorCode() << 8) | sd.card()->errorData(); }
   bool startServer();
 	bool isClientWaiting();
 	void acceptSecure();        // TLS handshake for a waiting https client (before the card is taken)
