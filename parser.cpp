@@ -52,12 +52,18 @@ void GCodeParser::parse(char *p) {
   // Get the command letter, which must be G, M, or T
   const char letter = *p++;
 
-  // Nullify asterisk and trailing whitespace
-  char *starpos = strchr(p, '*');
+  // Remove a trailing checksum ("*123") and the spaces before it.
+  // Only digits may follow the '*', so a '*' inside a password or SSID is kept.
+  char *starpos = strrchr(p, '*');
   if (starpos) {
-    --starpos;                          // *
-    while (*starpos == ' ') --starpos;  // spaces...
-    starpos[1] = '\0';
+    char *q = starpos + 1;
+    while (NUMERIC(*q)) ++q;
+    while (*q == ' ') ++q;
+    if (*q == '\0' && NUMERIC(starpos[1])) {
+      --starpos;                                     // *
+      while (starpos >= p && *starpos == ' ') --starpos;  // spaces...
+      starpos[1] = '\0';
+    }
   }
 
   // Bail if the letter is not G, M, or T
@@ -85,7 +91,7 @@ void GCodeParser::parse(char *p) {
   // The command parameters (if any) start here, for sure!
 
   // Only use string_arg for these M codes
-  if (letter == 'M') switch (codenum) { case 50: case 51: case 23: case 28: case 30: case 117: case 118: case 928: string_arg = p; return; default: break; }
+  if (letter == 'M') switch (codenum) { case 50: case 55: case 56: case 58: case 23: case 28: case 30: case 117: case 118: case 928: string_arg = p; return; default: break; }
 
   #if defined(DEBUG_GCODE_PARSER)
     const bool debug = codenum == 800;

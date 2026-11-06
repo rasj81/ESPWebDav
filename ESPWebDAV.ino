@@ -7,6 +7,7 @@
 #include "network.h"
 #include "gcode.h"
 #include "sdControl.h"
+#include "firmware.h"
 
 // LED is connected to GPIO2 on this board
 #define INIT_LED			{pinMode(2, OUTPUT);}
@@ -16,28 +17,28 @@
 // ------------------------
 void setup() {
 	SERIAL_INIT(115200);
+	SERIAL_ECHOLN("");
+	SERIAL_ECHOLN("ESPWebDAV build " __DATE__ " " __TIME__);
 	INIT_LED;
 	blink();
 	
 	sdcontrol.setup();
 
+	// FIRMWARE.BIN on the card: install it and restart (renamed to FIRMWARE.BAK afterwards)
+	firmwareFromCard();
+
 	// ----- WIFI -------
   if(config.load() == 1) { // Connected before
     if(!network.start()) {
-      SERIAL_ECHOLN("Connect fail, please check your INI file or set the wifi config and connect again");
-      SERIAL_ECHOLN("- M50: Set the wifi ssid , 'M50 ssid-name'");
-      SERIAL_ECHOLN("- M51: Set the wifi password , 'M51 password'");
-      SERIAL_ECHOLN("- M52: Start to connect the wifi");
-      SERIAL_ECHOLN("- M53: Check the connection status");
+      SERIAL_ECHOLN("Connect failed. Check SETUP.INI, or set the Wi-Fi with serial commands:");
+      gcode.printHelp();
     }
   }
   else {
     SERIAL_ECHOLN("Welcome to FYSETC: www.fysetc.com");
-    SERIAL_ECHOLN("Please set the wifi config first");
-    SERIAL_ECHOLN("- M50: Set the wifi ssid , 'M50 ssid-name'");
-    SERIAL_ECHOLN("- M51: Set the wifi password , 'M51 password'");
-    SERIAL_ECHOLN("- M52: Start to connect the wifi");
-    SERIAL_ECHOLN("- M53: Check the connection status");
+    SERIAL_ECHOLN("Please set the Wi-Fi first: put SETUP.INI on the card, or e.g.");
+    SERIAL_ECHOLN("  M50 SSID=MyWiFi   then   M50 PASSWORD=secret   then   M52");
+    gcode.printHelp();
   }
 }
 

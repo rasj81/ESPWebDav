@@ -7,6 +7,12 @@
 #include <Hash.h>
 #include <time.h>
 #include "ESPWebDAV.h"
+#include "logger.h"
+#include "config.h"
+#include "firmware.h"
+#include "sdControl.h"
+#include <Updater.h>
+#include "manager_html.h"
 
 // define cal constants
 const char *months[]  = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
@@ -14,20 +20,70 @@ const char *wdays[]  = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
 
 // ------------------------
-bool ESPWebDAV::init(int chipSelectPin, SPISettings spiSettings, int serverPort) {
+bool ESPWebDAV::init(int chipSelectPin, SdSpeed_t spiSpeed, int serverPort) {
 // ------------------------
-	// start the wifi server
-	server = new WiFiServer(serverPort);
-	server->begin();
+	// start the wifi server (only once, init() runs again after a reconnect)
+	if(!server)	{
+		server = new WiFiServer(serverPort);
+		server->begin();
+	}
 	
 	// initialize the SD card
-	return sd.begin(chipSelectPin, spiSettings);
+	sdReady = sd.begin(chipSelectPin, spiSpeed);
+	return sdReady;
 }
 
 // ------------------------
-bool ESPWebDAV::initSD(int chipSelectPin, SPISettings spiSettings) {
+bool ESPWebDAV::initSD(int chipSelectPin, SdSpeed_t spiSpeed) {
 	// initialize the SD card
-	return sd.begin(chipSelectPin, spiSettings);
+	sdReady = sd.begin(chipSelectPin, spiSpeed);
+	return sdReady;
+}
+
+// ------------------------
+// Append text to a log file, moving it to oldPath first when it gets too big
+bool ESPWebDAV::appendLog(const char* path, const char* oldPath, const String& text) {
+// ------------------------
+	if(!sdReady) return false;
+	sd.chvol();
+	FatFile f;
+	if(f.open(path, O_RDONLY))	{
+		uint32_t size = f.fileSize();
+		f.close();
+		if(size > LOG_FILE_MAX)	{
+			sd.remove(oldPath);
+			sd.rename(path, oldPath);
+		}
+	}
+	if(!f.open(path, O_WRONLY | O_CREAT | O_APPEND))
+		return false;
+	size_t n = (size_t)f.write((const void*)text.c_str(), text.length());
+	f.close();
+	return n == text.length();
+}
+
+// ------------------------
+bool ESPWebDAV::sdRename(const char* from, const char* to) {
+// ------------------------
+	if(!sdReady) return false;
+	sd.chvol();
+	if(!sd.exists(from)) return false;
+	if(sd.exists(to)) sd.remove(to);
+	return sd.rename(from, to);
+}
+
+// ------------------------
+bool ESPWebDAV::sdWriteFile(const char* path, const char* text) {
+// ------------------------
+	if(!sdReady) return false;
+	sd.chvol();
+	FatFile f;
+	if(!f.open(path, O_WRONLY | O_CREAT | O_TRUNC))
+		return false;
+	size_t len = strlen(text);
+	size_t n = (size_t)f.write((const void*)text, len);
+	f.close();
+	return n == len;
 }
 
 // ------------------------
@@ -35,6 +91,7 @@ bool ESPWebDAV::startServer() {
 // ------------------------
 	// start the wifi server
 	server->begin();
+	return true;
 }
 
 // ------------------------
@@ -50,6 +107,7 @@ void ESPWebDAV::handleNotFound() {
 	sendHeader("Allow", "OPTIONS,MKCOL,POST,PUT");
 	send("404 Not Found", "text/plain", message);
 	DBG_PRINTLN("404 Not Found");
+	logger.web(LOG_NORMAL, "404 %s %s", method.c_str(), uri.c_str());
 }
 
 
@@ -58,6 +116,16 @@ void ESPWebDAV::handleNotFound() {
 void ESPWebDAV::handleReject(String rejectMessage)	{
 // ------------------------
 	DBG_PRINT("Rejecting request: "); DBG_PRINTLN(rejectMessage);
+
+	// the file manager page lives in flash, so it works even while the printer has the card
+	if(handleManagerRoutes())
+		return;
+	if(method.equals("GET") && uri == "/")
+		return redirectToManager();
+	// lets the file manager page show "printer busy" instead of a fake listing
+	sendHeader("X-Busy", rejectMessage);
+	sendHeader("DAV", "1, 2");
+	logger.web(LOG_SPARSE, "REJECTED %s %s from %s: %s", method.c_str(), uri.c_str(), client->remoteIP().toString().c_str(), rejectMessage.c_str());
 
 	// handle options
 	if(method.equals("OPTIONS"))
@@ -72,7 +140,7 @@ void ESPWebDAV::handleReject(String rejectMessage)	{
 		
 		if(depthHeader.equals("1"))	{
 			sendContent(F("<D:response><D:href>/"));
-			sendContent(rejectMessage);
+			sendContent(urlEncodePath(rejectMessage));
 			sendContent(F("</D:href><D:propstat><D:status>HTTP/1.1 200 OK</D:status><D:prop><D:getlastmodified>Fri, 01 Apr 2016 16:07:40 GMT</D:getlastmodified><D:getetag>\"2222222222222222222222222222222222222222\"</D:getetag><D:resourcetype/><D:getcontentlength>0</D:getcontentlength><D:getcontenttype>application/octet-stream</D:getcontenttype></D:prop></D:propstat></D:response>"));
 		}
 		
@@ -96,9 +164,16 @@ void ESPWebDAV::handleRequest(String blank)	{
 // ------------------------
 	ResourceType resource = RESOURCE_NONE;
 
+	// built-in file manager page
+	if(handleManagerRoutes())
+		return;
+
+	// make this card the working volume for path-based opens (config.cpp uses its own SdFat)
+	sd.chvol();
+
 	// does uri refer to a file or directory or a null?
 	FatFile tFile;
-	if(tFile.open(sd.vwd(), uri.c_str(), O_READ))	{
+	if(tFile.open(uri.c_str(), O_RDONLY))	{
 		resource = tFile.isDir() ? RESOURCE_DIR : RESOURCE_FILE;
 		tFile.close();
 	}
@@ -106,9 +181,13 @@ void ESPWebDAV::handleRequest(String blank)	{
 	DBG_PRINT("\r\nm: "); DBG_PRINT(method);
 	DBG_PRINT(" r: "); DBG_PRINT(resource);
 	DBG_PRINT(" u: "); DBG_PRINTLN(uri);
+	// browsing requests are very frequent, so only at verbose; others (LOCK, OPTIONS, MKCOL...) at normal
+	logger.web((method.equals("PROPFIND") || method.equals("GET") || method.equals("HEAD")) ? LOG_VERBOSE : LOG_NORMAL,
+		"%s %s from %s", method.c_str(), uri.c_str(), client->remoteIP().toString().c_str());
 
 	// add header that gets sent everytime
-	sendHeader("DAV", "2");
+	// class 1 and 2 (locking); macOS Finder refuses servers that don't list class 1
+	sendHeader("DAV", "1, 2");
 
 	// handle properties
 	if(method.equals("PROPFIND"))
@@ -160,7 +239,8 @@ void ESPWebDAV::handleRequest(String blank)	{
 void ESPWebDAV::handleOptions(ResourceType resource)	{
 // ------------------------
 	DBG_PRINTLN("Processing OPTION");
-	sendHeader("Allow", "PROPFIND,GET,DELETE,PUT,COPY,MOVE");
+	sendHeader("Allow", "OPTIONS,GET,HEAD,PUT,DELETE,MKCOL,MOVE,COPY,PROPFIND,PROPPATCH,LOCK,UNLOCK");
+	sendHeader("MS-Author-Via", "DAV");
 	send("200 OK", NULL, "");
 }
 
@@ -180,12 +260,15 @@ void ESPWebDAV::handleLock(ResourceType resource)	{
 
 	size_t contentLen = contentLengthHeader.toInt();
 	uint8_t buf[1024];
-	size_t numRead = readBytesWithTimeout(buf, sizeof(buf), contentLen);
+	// leave room for the terminating zero; larger lock requests are cut short
+	if(contentLen > sizeof(buf) - 1)
+		contentLen = sizeof(buf) - 1;
+	size_t numRead = readBytesWithTimeout(buf, contentLen, contentLen);
 	
 	if(numRead == 0)
 		return handleNotFound();
 
-	buf[contentLen] = 0;
+	buf[numRead] = 0;
 	String inXML = String((char*) buf);
 	int startIdx = inXML.indexOf("<D:href>");
 	int endIdx = inXML.indexOf("</D:href>");
@@ -286,17 +369,17 @@ void ESPWebDAV::sendPropResponse(boolean recursing, FatFile *curFile)	{
 			fullResPath += "/" + String(buf);
 
 	// get file modified time
-	dir_t dir;
-	curFile->dirEntry(&dir);
+	uint16_t fatDate = 0, fatTime = 0;
+	sdGetModifyDateTime(curFile, &fatDate, &fatTime);
 
 	// convert to required format
-	tm tmStr;
-	tmStr.tm_hour = FAT_HOUR(dir.lastWriteTime);
-	tmStr.tm_min = FAT_MINUTE(dir.lastWriteTime);
-	tmStr.tm_sec = FAT_SECOND(dir.lastWriteTime);
-	tmStr.tm_year = FAT_YEAR(dir.lastWriteDate) - 1900;
-	tmStr.tm_mon = FAT_MONTH(dir.lastWriteDate) - 1;
-	tmStr.tm_mday = FAT_DAY(dir.lastWriteDate);
+	tm tmStr = {};
+	tmStr.tm_hour = SD_HOUR(fatTime);
+	tmStr.tm_min = SD_MINUTE(fatTime);
+	tmStr.tm_sec = SD_SECOND(fatTime);
+	tmStr.tm_year = SD_YEAR(fatDate) - 1900;
+	tmStr.tm_mon = SD_MONTH(fatDate) - 1;
+	tmStr.tm_mday = SD_DAY(fatDate);
 	time_t t2t = mktime(&tmStr);
 	tm *gTm = gmtime(&t2t);
 
@@ -307,8 +390,11 @@ void ESPWebDAV::sendPropResponse(boolean recursing, FatFile *curFile)	{
 
 	// send the XML information about thyself to client
 	sendContent(F("<D:response><D:href>"));
-	// append full file path
-	sendContent(fullResPath);
+	// folders end in '/'
+	if(curFile->isDir() && !fullResPath.endsWith("/"))
+		fullResPath += "/";
+	// full path, URL-encoded (spaces etc. as %20) as WebDAV clients like Finder expect
+	sendContent(urlEncodePath(fullResPath));
 	sendContent(F("</D:href><D:propstat><D:status>HTTP/1.1 200 OK</D:status><D:prop><D:getlastmodified>"));
 	// append modified date
 	sendContent(fileTimeStamp);
@@ -339,6 +425,10 @@ void ESPWebDAV::handleGet(ResourceType resource, bool isGet)	{
 // ------------------------
 	DBG_PRINTLN("Processing GET");
 
+	// a browser asking for a folder (e.g. http://printer1.local/) gets the file manager
+	if(resource == RESOURCE_DIR && isGet)
+		return redirectToManager();
+
 	// does URI refer to an existing file resource
 	if(resource != RESOURCE_FILE)
 		return handleNotFound();
@@ -359,17 +449,19 @@ void ESPWebDAV::handleGet(ResourceType resource, bool isGet)	{
 
 	if(isGet)	{
 		// disable Nagle if buffer size > TCP MTU of 1460
-		// client.setNoDelay(1);
+		client->setNoDelay(true);
 
 		// send the file
 		while(rFile.available())	{
 			// SD read speed ~ 17sec for 4.5MB file
 			int numRead = rFile.read(buf, sizeof(buf));
-			client.write(buf, numRead);
+			client->write(buf, numRead);
 		}
 	}
 
 	rFile.close();
+	if(isGet)
+		logger.files(LOG_NORMAL, "DOWNLOAD %s (%u bytes, %lu ms) to %s", uri.c_str(), (unsigned)fileSize, (unsigned long)(millis() - tStart), client->remoteIP().toString().c_str());
 	DBG_PRINT("File "); DBG_PRINT(fileSize); DBG_PRINT(" bytes sent in: "); DBG_PRINT((millis() - tStart)/1000); DBG_PRINTLN(" sec");
 }
 
@@ -416,20 +508,25 @@ void ESPWebDAV::handlePut(ResourceType resource)	{
 		size_t contBlocks = (contentLen/WRITE_BLOCK_CONST + 1);
 		uint32_t bgnBlock, endBlock;
 
-		if (!nFile.createContiguous(sd.vwd(), uri.c_str(), contBlocks * WRITE_BLOCK_CONST))
+		if (!nFile.createContiguous(uri.c_str(), contBlocks * WRITE_BLOCK_CONST))
 			return handleWriteError("File create contiguous sections failed", &nFile);
 
 		// get the location of the file's blocks
 		if (!nFile.contiguousRange(&bgnBlock, &endBlock))
 			return handleWriteError("Unable to get contiguous range", &nFile);
 
+#if SDFAT_V2
+		if (!sd.card()->writeStart(bgnBlock))
+#else
 		if (!sd.card()->writeStart(bgnBlock, contBlocks))
+#endif
 			return handleWriteError("Unable to start writing contiguous range", &nFile);
 
 		// read data from stream and write to the file
 		while(numRemaining > 0)	{
 			size_t numToRead = (numRemaining > WRITE_BLOCK_CONST) ? WRITE_BLOCK_CONST : numRemaining;
-			size_t numRead = readBytesWithTimeout(buf, sizeof(buf), numToRead);
+			// never read past this file's data, so numRemaining can't wrap around
+			size_t numRead = readBytesWithTimeout(buf, numToRead, numToRead);
 			if(numRead == 0)
 				break;
 
@@ -453,8 +550,12 @@ void ESPWebDAV::handlePut(ResourceType resource)	{
 		if(!nFile.truncate(contentLen))
 			return handleWriteError("Unable to truncate the file", &nFile);
 
+		logger.files(LOG_NORMAL, "UPLOAD %s (%u bytes, %lu ms) from %s", uri.c_str(), (unsigned)contentLen, (unsigned long)(millis() - tStart), client->remoteIP().toString().c_str());
 		DBG_PRINT("File "); DBG_PRINT(contentLen - numRemaining); DBG_PRINT(" bytes stored in: "); DBG_PRINT((millis() - tStart)/1000); DBG_PRINTLN(" sec");
 	}
+
+	if(contentLen == 0)
+		logger.files(LOG_NORMAL, "UPLOAD %s (empty file) from %s", uri.c_str(), client->remoteIP().toString().c_str());
 
 	if(resource == RESOURCE_NONE)
 		send("201 Created", NULL, "");
@@ -477,6 +578,7 @@ void ESPWebDAV::handleWriteError(String message, FatFile *wFile)	{
 	// send error
 	send("500 Internal Server Error", "text/plain", message);
 	DBG_PRINTLN(message);
+	logger.files(LOG_SPARSE, "UPLOAD %s FAILED: %s", uri.c_str(), message.c_str());
 }
 
 
@@ -494,10 +596,12 @@ void ESPWebDAV::handleDirectoryCreate(ResourceType resource)	{
 		// send error
 		send("500 Internal Server Error", "text/plain", "Unable to create directory");
 		DBG_PRINTLN("Unable to create directory");
+		logger.files(LOG_SPARSE, "MKDIR %s FAILED", uri.c_str());
 		return;
 	}
 
 	DBG_PRINT(uri);	DBG_PRINTLN(" directory created");
+	logger.files(LOG_NORMAL, "MKDIR %s from %s", uri.c_str(), client->remoteIP().toString().c_str());
 	sendHeader("Allow", "OPTIONS,MKCOL,LOCK,POST,PUT");
 	send("201 Created", NULL, "");
 }
@@ -516,19 +620,26 @@ void ESPWebDAV::handleMove(ResourceType resource)	{
 	if(destinationHeader.length() == 0)
 		return handleNotFound();
 	
-	String dest = urlToUri(destinationHeader);
+	String dest = urlDecode(urlToUri(destinationHeader));
+	if(dest.length() > 1 && dest.endsWith("/"))
+		dest.remove(dest.length() - 1);
 		
 	DBG_PRINT("Move destination: "); DBG_PRINTLN(dest);
 
 	// move file or directory
-	if ( !sd.rename(uri.c_str(), dest.c_str())	) {
+	String src = uri;
+	if(src.length() > 1 && src.endsWith("/"))
+		src.remove(src.length() - 1);
+	if ( !sd.rename(src.c_str(), dest.c_str())	) {
 		// send error
 		send("500 Internal Server Error", "text/plain", "Unable to move");
 		DBG_PRINTLN("Unable to move file/directory");
+		logger.files(LOG_SPARSE, "MOVE %s -> %s FAILED", uri.c_str(), dest.c_str());
 		return;
 	}
 
 	DBG_PRINTLN("Move successful");
+	logger.files(LOG_NORMAL, "MOVE %s -> %s from %s", uri.c_str(), dest.c_str(), client->remoteIP().toString().c_str());
 	sendHeader("Allow", "OPTIONS,MKCOL,LOCK,POST,PUT");
 	send("201 Created", NULL, "");
 }
@@ -550,20 +661,238 @@ void ESPWebDAV::handleDelete(ResourceType resource)	{
 	if(resource == RESOURCE_FILE)
 		// delete a file
 		retVal = sd.remove(uri.c_str());
-	else
-		// delete a directory
-		retVal = sd.rmdir(uri.c_str());
+	else	{
+		// delete a directory and everything in it (WebDAV DELETE on a folder is recursive)
+		String path = uri;
+		if(path.length() > 1 && path.endsWith("/"))
+			path.remove(path.length() - 1);
+		retVal = false;
+		if(path.length() > 1)	{   // never delete the card's root
+			FatFile dir;
+			if(dir.open(path.c_str(), O_RDONLY))	{
+				retVal = dir.rmRfStar();
+				dir.close();
+			}
+		}
+	}
 		
 	if(!retVal)	{
 		// send error
 		send("500 Internal Server Error", "text/plain", "Unable to delete");
 		DBG_PRINTLN("Unable to delete file/directory");
+		logger.files(LOG_SPARSE, "DELETE %s FAILED", uri.c_str());
 		return;
 	}
 
 	DBG_PRINTLN("Delete successful");
+	logger.files(LOG_NORMAL, "DELETE %s from %s", uri.c_str(), client->remoteIP().toString().c_str());
 	sendHeader("Allow", "OPTIONS,MKCOL,LOCK,POST,PUT");
 	send("200 OK", NULL, "");
+}
+
+// ------------------------
+// Serve the built-in file manager at /_manager. Returns true if the request was handled.
+bool ESPWebDAV::handleManagerRoutes() {
+// ------------------------
+	// firmware upload from the file manager (raw .bin body)
+	if((method.equals("PUT") || method.equals("POST")) && uri == "/_update")	{
+		handleFirmwareUpload();
+		return true;
+	}
+	// card owner switch: GET /_card shows it, POST /_card?printer or ?network sets it
+	if(uri == "/_card" || uri.startsWith("/_card?"))	{
+		if(method.equals("POST") || method.equals("PUT"))	{
+			bool toPrinter = uri.endsWith("printer");
+			if(toPrinter != sdcontrol.reservedForPrinter())	{
+				sdcontrol.reserveForPrinter(toPrinter);
+				logger.net(LOG_NORMAL, "Card set to %s mode from %s", toPrinter ? "Printer" : "Network", client->remoteIP().toString().c_str());
+			}
+		}
+		sendHeader("Cache-Control", "no-cache");
+		send("200 OK", "text/plain", cardState());
+		return true;
+	}
+	if(!(method.equals("GET") || method.equals("HEAD")))
+		return false;
+	// firmware build date, shown on the file manager page
+	if(uri == "/_info")	{
+		sendHeader("Cache-Control", "no-cache");
+		// tells the page whether to offer "Update firmware" (only with a login set)
+		sendHeader("X-Update", config.authOn() ? "1" : "0");
+		sendHeader("X-Card", cardState());
+		send("200 OK", "text/plain", "ESPWebDAV build " __DATE__ " " __TIME__);
+		return true;
+	}
+	// the board's https certificate, to install as trusted on a computer
+	if(uri == "/_cert" || uri == "/_cert.cer")	{
+		handleCertDownload();
+		return true;
+	}
+	if(uri == "/_manager" || uri == "/_manager/" || uri.startsWith("/_manager?"))	{
+		// with HTTPS=1 the page is only served over https
+		if(httpsOn() && !isSecure)
+			redirectToManager();
+		else
+			handleManagerPage();
+		return true;
+	}
+	return false;
+}
+
+// ------------------------
+void ESPWebDAV::handleManagerPage() {
+// ------------------------
+	size_t len = strlen_P(MANAGER_HTML);
+	sendHeader("Cache-Control", "no-cache");
+	setContentLength(len);
+	send("200 OK", "text/html; charset=utf-8", "");
+	if(method.equals("GET"))
+		client->write_P(MANAGER_HTML, len);
+	logger.web(LOG_VERBOSE, "file manager page to %s", client->remoteIP().toString().c_str());
+}
+
+// ------------------------
+// Send a browser to the file manager, opened at the folder it asked for
+void ESPWebDAV::redirectToManager() {
+// ------------------------
+	String target = "/_manager";
+	if(uri.length() > 1 && !uri.startsWith("/_manager"))	{
+		String p = uri;
+		p.replace("%", "%25");
+		p.replace(" ", "%20");
+		p.replace("#", "%23");
+		target += "#" + p;
+	}
+	if(httpsOn() && !isSecure)
+		target = "https://" + requestHost() + target;
+	sendHeader("Location", target);
+	send("302 Found", "text/plain", "File manager: " + target);
+}
+
+// ------------------------
+// New firmware uploaded from the file manager. The SD card isn't needed, so it goes
+// back to the printer for the 10-30 seconds this takes.
+void ESPWebDAV::handleFirmwareUpload() {
+// ------------------------
+	// without a login anyone on the network could replace the firmware, so it's refused
+	if(!config.authOn())	{
+		logger.net(LOG_SPARSE, "Firmware upload REFUSED from %s: no login set (AUTH=1, DAV_USER, DAV_PASSWORD)", client->remoteIP().toString().c_str());
+		send("403 Forbidden", "text/plain", "Firmware update over the network needs a login: set AUTH=1, DAV_USER and DAV_PASSWORD. FIRMWARE.BIN on the card still works.\n");
+		return;
+	}
+	size_t len = contentLengthHeader.toInt();
+	if(len < 4096)	{
+		send("400 Bad Request", "text/plain", "Firmware update: no file, or file too small\n");
+		return;
+	}
+	sdcontrol.relinquishBusControl();
+	busGivenBack = true;
+	String who = client->remoteIP().toString();
+	logger.net(LOG_NORMAL, "Firmware upload started (%u bytes) from %s", (unsigned)len, who.c_str());
+
+	String err;
+	bool ok = Update.begin(len);
+	if(!ok)
+		err = firmwareError() + " (needs " + String(len) + " bytes, " + String(ESP.getFreeSketchSpace()) + " free; a gzipped .bin.gz is much smaller)";
+	uint8_t buf[1024];
+	size_t left = len;
+	bool first = true;
+	while(ok && left)	{
+		size_t n = readBytesWithTimeout(buf, sizeof(buf), left < sizeof(buf) ? left : sizeof(buf));
+		if(n == 0)	{ ok = false; err = "upload stopped"; break; }
+		// firmware images start with 0xE9; gzip-compressed ones (unpacked at boot) with 0x1F
+		if(first && buf[0] != 0xE9 && buf[0] != 0x1F)	{ ok = false; err = "not an ESP8266 firmware .bin (or gzipped .bin) file"; break; }
+		first = false;
+		if(Update.write(buf, n) != n)	{ ok = false; err = firmwareError(); break; }
+		left -= n;
+		yield();
+	}
+	if(ok && !Update.end())	{ ok = false; err = firmwareError(); }
+	if(!ok)
+		Update.end(true);   // throw away a partial update; the old firmware keeps running
+
+	if(ok)	{
+		logger.net(LOG_NORMAL, "Firmware upload OK from %s, restarting", who.c_str());
+		send("200 OK", "text/plain", "Firmware updated, restarting\n");
+		client->flush();
+		client->stop();
+		delay(500);
+		ESP.restart();
+		while(true) delay(100);
+	}
+	logger.net(LOG_SPARSE, "Firmware upload FAILED from %s: %s", who.c_str(), err.c_str());
+	send("500 Internal Server Error", "text/plain", "Firmware update failed: " + err + "\n");
+}
+
+// ------------------------
+// "printer" (Printer mode), "busy" (printer used it in the last PRINTER_WAIT s) or "network"
+const char* ESPWebDAV::cardState() {
+// ------------------------
+	if(sdcontrol.reservedForPrinter()) return "printer";
+	if(sdcontrol.printerActive()) return "busy";
+	return "network";
+}
+
+// ------------------------
+// The name the browser used for the board (Host header without the port)
+String ESPWebDAV::requestHost() {
+// ------------------------
+	String h = hostHeader;
+	h.trim();
+	int colon = h.indexOf(':');
+	if(colon >= 0)
+		h.remove(colon);
+	if(h.length() == 0)
+		h = WiFi.localIP().toString();
+	return h;
+}
+
+// ------------------------
+void ESPWebDAV::handleCertDownload() {
+// ------------------------
+	size_t len = 0;
+	const uint8_t* der = https.certDer(len);
+	if(!der)	{
+		send("404 Not Found", "text/plain", "No certificate: HTTPS is off (set HTTPS=1)");
+		return;
+	}
+	sendHeader("Content-Disposition", String("attachment; filename=\"") + config.deviceName() + ".cer\"");
+	sendHeader("Cache-Control", "no-cache");
+	setContentLength(len);
+	send("200 OK", "application/x-x509-ca-cert", "");
+	if(method.equals("GET"))
+		client->write(der, len);
+	logger.web(LOG_NORMAL, "certificate downloaded by %s", client->remoteIP().toString().c_str());
+}
+
+// ------------------------
+// Percent-encode everything in a path except letters, digits, - _ . ~ and /
+String ESPWebDAV::urlEncodePath(const String& s) {
+// ------------------------
+	static const char hex[] = "0123456789ABCDEF";
+	String out;
+	out.reserve(s.length() + 8);
+	for(unsigned i = 0; i < s.length(); i++)	{
+		uint8_t c = (uint8_t)s[i];
+		if((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~' || c == '/')
+			out += (char)c;
+		else	{
+			out += '%';
+			out += hex[c >> 4];
+			out += hex[c & 15];
+		}
+	}
+	return out;
+}
+
+// ------------------------
+String ESPWebDAV::xmlEscape(const String& s) {
+// ------------------------
+	String out = s;
+	out.replace("&", "&amp;");
+	out.replace("<", "&lt;");
+	out.replace(">", "&gt;");
+	return out;
 }
 
 ESPWebDAV dav;
